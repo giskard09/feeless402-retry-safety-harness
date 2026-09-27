@@ -1,0 +1,34 @@
+== 1. battery (execute_payment vs Feeless402 merchant, unchanged shape) ==
+  SAFE             clean                  verdict=settled ledger_len=1 served=1 settle=1 reconcile=0 statuses=[200] followup=None err=None
+  SAFE             declared_safe          verdict=settled ledger_len=1 served=1 settle=1 reconcile=0 statuses=[200] followup=None err=None
+  SAFE             accept_then_timeout    verdict=settled ledger_len=1 served=1 settle=1 reconcile=0 statuses=[200] followup=None err=None
+  SAFE             5xx_after_settle       verdict=settled ledger_len=1 served=1 settle=2 reconcile=0 statuses=[200, 200] followup=None err=None
+  SAFE             slow_answer            verdict=settled ledger_len=1 served=1 settle=2 reconcile=0 statuses=[200, 200] followup=None err=None
+  SAFE             reconcile_unavailable  verdict=settled ledger_len=1 served=1 settle=2 reconcile=1 statuses=[200, 200] followup=None err=None
+  SAFE             double_402             verdict=settled ledger_len=1 served=1 settle=2 reconcile=0 statuses=[200, 200] followup=None err=None
+  -- extra rows: client re-presents 25h later, past the 24h window --
+  PAID_NOT_SERVED  late_restart           verdict=indeterminate ledger_len=1 served=0 settle=3 reconcile=0 statuses=[200, 402, 402] followup=402 err=Challenge402 twice: payment invalid: block.previous is not the payer's frontier
+  PAID_NOT_SERVED  late_restart_with_ref  verdict=settled ledger_len=1 served=0 settle=1 reconcile=1 statuses=[200] followup=402 err=None
+  -- merchant mutation: settled_replay disabled (pre-0.2.7 behaviour) --
+  PAID_NOT_SERVED  5xx_after_settle       statuses=[200, 402, 402] followup=402 err=Challenge402 twice: payment invalid: block.previous is not the payer's frontier
+  PAID_NOT_SERVED  slow_answer            statuses=[200, 402, 402] followup=402 err=Challenge402 twice: payment invalid: block.previous is not the payer's frontier
+  PAID_NOT_SERVED  double_402             statuses=[200, 402, 402] followup=402 err=Challenge402 twice: payment invalid: block.previous is not the payer's frontier
+  mutation control (new block per round, slow_answer): {'ledger_len': 2, 'served': 1, 'outcome': 'DOUBLE_CHARGE'} -> discriminates
+
+== 2. replay-bound edges (paid, settled, reply lost) ==
+  E1a re-present at 23:59:59h                                    200
+  E1b re-present at 24:00:01h                                    402
+  E2 four re-presentations, no proof, same requester             [200, 200, 200, 402]
+  E2p five re-presentations WITH proof (cap should be 100, not 3) [200, 200, 200, 200, 200]
+  E3a observer(no proof) exhausts 3, payer ALSO no proof         {'observer': [200, 200, 200], 'payer_no_proof': 402, 'ledger_len': 1}
+  E3b observer(no proof) exhausts 3, payer PROVES (the real 0.2.9 client path) {'observer': [200, 200, 200], 'payer_with_proof': 200, 'ledger_len': 1}
+  E3c observer spoofs 31 X-Forwarded-For values (no proof) vs 30-cap {'spoofed_200_count': 30, 'spoofed_402_count': 1, 'payer_no_proof_after': 402, 'ledger_len': 1}
+  E4 no local_timestamp, 25h old (was the 0.2.8 window-skip bug) 200
+  E5 merchant restart resets cap (in-memory _replays, unchanged limit) {'first3': [200, 200, 200], 'after_restart': 200}
+
+== 3. Feeless402 client (request_with_payment, now journal-backed) ==
+  C1: {"settled": true, "ledger": "confirmed", "receipt_keys": ["amount_xno", "block", "ledger", "note", "pay_to", "settled", "will_re_present"], "note": "payment is on the ledger; if the merchant did not deliver, re-present this SAME block \u2014 do not pay again", "will_re_present": true, "ledger_len": 1}
+  journal_written_after_C1: true
+  C2: {"status": 200, "new_block": false, "block_matches_journal": true, "ledger_len": 1}
+  journal_cleared_after_C2: true
+  C3: {"inside_window": 200, "after_window": 402, "client_verdict_after_402": [true, "confirmed"], "note_shown": "payment is on the ledger; if the merchant did not deliver, re-present this SAME block \u2014 do not pay again", "ledger_len": 1}
